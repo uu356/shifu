@@ -60,23 +60,23 @@ export function PyodideProvider({ children }) {
   // Fallback simulator for basic print() when Pyodide unavailable
   function runFallback(code) {
     const lines = code.split('\n');
-    let output = '';
+    const outputLines = [];
     for (const line of lines) {
       const t = line.trim();
       if (!t || t.startsWith('#')) continue;
-      const m = t.match(/^print\(([\s\S]*)\)$/);
+      const m = t.match(/^print\s*\(([\s\S]*)\)$/);
       if (m) {
         const arg = m[1].trim();
         if ((arg.startsWith('"') && arg.endsWith('"')) || (arg.startsWith("'") && arg.endsWith("'"))) {
-          output += arg.slice(1, -1) + '\n';
+          outputLines.push(arg.slice(1, -1));
         } else if (!isNaN(Number(arg))) {
-          output += arg + '\n';
+          outputLines.push(arg);
         } else {
-          output += `[simul]: ${arg}\n`;
+          outputLines.push(`[simul]: ${arg}`);
         }
       }
     }
-    return { output: output || "(chiqish yo'q)", error: null, success: true, simulated: true };
+    return { output: outputLines.join('\n') || "(chiqish yo'q)", error: null, success: true, simulated: true };
   }
 
   const runCode = async (code) => {
@@ -99,16 +99,23 @@ export function PyodideProvider({ children }) {
       return res;
     }
 
-    let stdoutText = '';
-    let stderrText = '';
+    let stdoutLines = [];
+    let stderrLines = [];
     try {
       const py = pyodideRef.current;
-      py.setStdout({ write: (s) => { stdoutText += s; } });
-      py.setStderr({ write: (s) => { stderrText += s; } });
+      py.setStdout({
+        batched: (line) => {
+          stdoutLines.push(line);
+        }
+      });
+      py.setStderr({
+        batched: (line) => {
+          stderrLines.push(line);
+        }
+      });
       await py.runPythonAsync(code);
-      // Strip single trailing newline that Python naturally adds
-      const output = stdoutText.replace(/\n$/, '');
-      const errText = stderrText.replace(/\n$/, '');
+      const output = stdoutLines.join('\n');
+      const errText = stderrLines.join('\n');
       setIsRunning(false);
       return {
         output: output || (errText ? "" : "✓ Dastur bajarildi (chiqish yo'q)"),
@@ -119,7 +126,7 @@ export function PyodideProvider({ children }) {
       const raw = err.message || String(err);
       setIsRunning(false);
       return {
-        output: stdoutText.replace(/\n$/, ''),
+        output: stdoutLines.join('\n'),
         error: cleanPythonError(raw),
         rawError: raw,
         success: false
