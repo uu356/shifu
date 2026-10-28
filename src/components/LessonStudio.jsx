@@ -2,10 +2,21 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import AITeacherPanel from './AITeacherPanel';
 import { usePyodide } from '../contexts/PyodideContext';
 
-export default function LessonStudio({ lesson, onCompleteLesson, onBack }) {
+export default function LessonStudio({ 
+  lesson, 
+  lessons = [], 
+  onCompleteLesson, 
+  onBack,
+  onNextLesson,
+  onPrevLesson
+}) {
   const { runCode, isLoading: isPyodideLoading, loadingMessage, isRunning } = usePyodide();
 
   const [exerciseMode, setExerciseMode] = useState("guided");
+
+  const currentIndex = lessons.findIndex(l => l.id === lesson.id);
+  const prevLesson = currentIndex > 0 ? lessons[currentIndex - 1] : null;
+  const nextLesson = currentIndex >= 0 && currentIndex < lessons.length - 1 ? lessons[currentIndex + 1] : null;
 
   const getStarterCode = (mode) => {
     if (mode === "guided" && lesson.content?.stepByStepExercise?.starterCode) {
@@ -42,7 +53,7 @@ export default function LessonStudio({ lesson, onCompleteLesson, onBack }) {
       e.preventDefault();
       if (handleRunRef.current) handleRunRef.current();
     }
-  }, []); // stable — no deps needed with ref pattern
+  }, []);
 
   // Keep ref in sync so handleKeyDown always calls latest handleRun
   useEffect(() => {
@@ -69,7 +80,11 @@ export default function LessonStudio({ lesson, onCompleteLesson, onBack }) {
       const isValid = lesson.content.stepByStepExercise.validator(result.output);
       if (isValid) {
         setValidationSuccess(true);
-        setValidationMessage("✅ Barakalla! Bosqichma-bosqich mashq bajarildi. Endi 'Mustaqil topshiriq' bo'limiga o'ting!");
+        setValidationMessage("✅ Barakalla! Bosqichma-bosqich mashq bajarildi. Endi mustaqil topshiriqni bajaring yoki to'g'ridan-to'g'ri keyingi darsga o'ting!");
+        if (!alreadyCompletedThisSession) {
+          setAlreadyCompletedThisSession(true);
+          onCompleteLesson(lesson.id, Math.round(lesson.xp / 2));
+        }
       } else {
         if (!result.output || !result.output.trim()) {
           setValidationMessage("ℹ️ Kodingiz hali hech qanday natija bermadi. Chap tarafdagi yo'riqnoma va maslahatga qarab kodni yozing.");
@@ -108,11 +123,50 @@ export default function LessonStudio({ lesson, onCompleteLesson, onBack }) {
 
   return (
     <div>
-      {/* Top Bar */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1.25rem', flexWrap: 'wrap', gap: '0.75rem' }}>
-        <button className="btn-secondary" onClick={onBack}>
-          ← O'quv xaritasiga qaytish
-        </button>
+      {/* Top Bar with Navigation */}
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        marginBottom: '1.25rem',
+        flexWrap: 'wrap',
+        gap: '0.75rem',
+        background: 'var(--bg-surface)',
+        padding: '0.75rem 1.25rem',
+        borderRadius: 'var(--radius-md)',
+        border: '1px solid var(--border)'
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
+          <button className="btn-secondary" onClick={onBack} title="O'quv xaritasiga qaytish">
+            ← O'quv xaritasi
+          </button>
+          
+          {prevLesson && (
+            <button 
+              className="btn-secondary" 
+              onClick={() => onPrevLesson && onPrevLesson(prevLesson)}
+              title={`${prevLesson.title} darsiga o'tish`}
+            >
+              ◀ {prevLesson.id}-dars
+            </button>
+          )}
+
+          <span style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--text-muted)', padding: '0 0.3rem' }}>
+            Dars {lesson.id} / {lessons.length || 12}
+          </span>
+
+          {nextLesson && (
+            <button 
+              className="btn-primary" 
+              style={{ padding: '0.45rem 1rem', fontSize: '0.82rem', width: 'auto' }}
+              onClick={() => onNextLesson && onNextLesson(nextLesson)}
+              title={`${nextLesson.title} darsiga o'tish`}
+            >
+              Keyingi dars ({nextLesson.id}-dars) ▶
+            </button>
+          )}
+        </div>
+
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
           <span style={{
             fontSize: '0.82rem',
@@ -276,21 +330,110 @@ export default function LessonStudio({ lesson, onCompleteLesson, onBack }) {
                   <div style={{ marginTop: '0.35rem', whiteSpace: 'pre-wrap' }}>{error}</div>
                 </div>
               )}
+
+              {/* Validation Card & Action Buttons */}
               {validationMessage && (
                 <div style={{
-                  marginTop: '0.75rem', padding: '0.75rem', borderRadius: 'var(--radius-sm)',
+                  marginTop: '0.75rem', padding: '1rem', borderRadius: 'var(--radius-sm)',
                   background: validationSuccess ? 'rgba(16,185,129,0.15)' : 'rgba(245,158,11,0.1)',
                   border: `1px solid ${validationSuccess ? '#10b981' : '#f59e0b'}`,
                   color: validationSuccess ? '#34d399' : '#fbbf24',
-                  fontWeight: 600, whiteSpace: 'pre-line', fontSize: '0.88rem'
+                  fontWeight: 600, fontSize: '0.88rem'
                 }}>
-                  {validationMessage}
+                  <div style={{ whiteSpace: 'pre-line', marginBottom: validationSuccess ? '0.75rem' : 0 }}>
+                    {validationMessage}
+                  </div>
+
+                  {validationSuccess && (
+                    <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap', marginTop: '0.5rem' }}>
+                      {exerciseMode === "guided" && lesson.content?.independentTask && (
+                        <button
+                          className="btn-secondary"
+                          style={{
+                            background: 'rgba(245, 158, 11, 0.2)',
+                            borderColor: '#f59e0b',
+                            color: '#fbbf24',
+                            fontWeight: 700,
+                            padding: '0.45rem 1rem'
+                          }}
+                          onClick={() => setExerciseMode("independent")}
+                        >
+                          🚀 Mustaqil topshiriqqa o'tish
+                        </button>
+                      )}
+
+                      {nextLesson && (
+                        <button
+                          className="btn-primary"
+                          style={{
+                            width: 'auto',
+                            padding: '0.45rem 1.25rem',
+                            background: 'linear-gradient(135deg, #10b981, #06b6d4)',
+                            fontWeight: 700
+                          }}
+                          onClick={() => onNextLesson && onNextLesson(nextLesson)}
+                        >
+                          ➔ Keyingi dars ({nextLesson.id}-dars: {nextLesson.title})
+                        </button>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
+
               {!output && !error && !validationMessage && (
                 <div style={{ color: 'var(--text-dim)', fontStyle: 'italic' }}>
                   Kodni ishga tushirsangiz, natija bu yerda ko'rinadi...
                 </div>
+              )}
+            </div>
+          </div>
+
+          {/* Quick Bottom Nav Bar */}
+          <div style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            marginTop: '1rem',
+            padding: '0.75rem',
+            background: 'var(--bg-surface)',
+            borderRadius: 'var(--radius-md)',
+            border: '1px solid var(--border)',
+            flexWrap: 'wrap',
+            gap: '0.5rem'
+          }}>
+            <div>
+              {prevLesson ? (
+                <button
+                  className="btn-secondary"
+                  onClick={() => onPrevLesson && onPrevLesson(prevLesson)}
+                >
+                  ◀ {prevLesson.title}
+                </button>
+              ) : (
+                <button className="btn-secondary" onClick={onBack}>
+                  ← O'quv xaritasi
+                </button>
+              )}
+            </div>
+
+            <div>
+              {nextLesson ? (
+                <button
+                  className="btn-primary"
+                  style={{ width: 'auto', padding: '0.5rem 1.5rem', background: 'linear-gradient(135deg, #4f46e5, #06b6d4)' }}
+                  onClick={() => onNextLesson && onNextLesson(nextLesson)}
+                >
+                  Keyingi dars: {nextLesson.title} ➔
+                </button>
+              ) : (
+                <button
+                  className="btn-primary"
+                  style={{ width: 'auto', padding: '0.5rem 1.5rem', background: 'linear-gradient(135deg, #059669, #10b981)' }}
+                  onClick={onBack}
+                >
+                  🏆 Kurs yakunlandi! Xaritaga qaytish ➔
+                </button>
               )}
             </div>
           </div>

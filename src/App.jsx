@@ -4,11 +4,11 @@ import CourseMapView from './components/CourseMapView';
 import LessonStudio from './components/LessonStudio';
 import HarvardCS50PView from './components/HarvardCS50PView';
 import CapstoneProjectsView from './components/CapstoneProjectsView';
+import DatabaseModal from './components/DatabaseModal';
 import { PyodideProvider } from './contexts/PyodideContext';
 import { LESSONS } from './data/lessonsData';
+import { loadUserStats, saveUserStats, DEFAULT_STATS } from './utils/storageDB';
 import confetti from 'canvas-confetti';
-
-const STORAGE_KEY = 'shifu_python_user_progress_v2';
 
 function calcStreak(lastVisitISO) {
   if (!lastVisitISO) return 1;
@@ -16,65 +16,35 @@ function calcStreak(lastVisitISO) {
   const today = new Date();
   const diffMs = today.setHours(0, 0, 0, 0) - last.setHours(0, 0, 0, 0);
   const diffDays = Math.round(diffMs / (1000 * 60 * 60 * 24));
-  return diffDays; // 0 = same day, 1 = consecutive, >1 = broken
+  return diffDays;
 }
-
-const DEFAULT_STATS = {
-  xp: 0,
-  level: 1,
-  streak: 1,
-  lastVisitDate: new Date().toISOString().split('T')[0],
-  completedLessonIds: [],
-  badges: ['🐣 Yangi Boshlovchi']
-};
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('course');
   const [activeLesson, setActiveLesson] = useState(null);
+  const [isDBModalOpen, setIsDBModalOpen] = useState(false);
 
   const [userStats, setUserStats] = useState(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        // Update streak on load
-        const today = new Date().toISOString().split('T')[0];
-        const lastVisit = parsed.lastVisitDate;
-        let newStreak = parsed.streak;
+    const data = loadUserStats();
+    const today = new Date().toISOString().split('T')[0];
+    const lastVisit = data.lastVisitDate;
+    let newStreak = data.streak;
 
-        if (lastVisit !== today) {
-          const diffDays = calcStreak(lastVisit);
-          if (diffDays === 1) {
-            // Consecutive day → streak up
-            newStreak = (parsed.streak || 1) + 1;
-          } else if (diffDays > 1) {
-            // Gap → streak reset
-            newStreak = 1;
-          }
-        }
-        return { ...parsed, streak: newStreak, lastVisitDate: today };
+    if (lastVisit !== today) {
+      const diffDays = calcStreak(lastVisit);
+      if (diffDays === 1) {
+        newStreak = (data.streak || 1) + 1;
+      } else if (diffDays > 1) {
+        newStreak = 1;
       }
-    } catch { /* ignore */ }
-    return { ...DEFAULT_STATS, lastVisitDate: new Date().toISOString().split('T')[0] };
+    }
+    return { ...data, streak: newStreak, lastVisitDate: today };
   });
 
-  // Persist to localStorage on every stats change
+  // Persist to storageDB whenever userStats updates
   useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(userStats));
-    } catch { /* ignore */ }
+    saveUserStats(userStats);
   }, [userStats]);
-
-  // Also save active lesson so page-refresh restores it
-  useEffect(() => {
-    try {
-      if (activeLesson) {
-        localStorage.setItem('shifu_active_lesson', JSON.stringify({ tab: activeTab, lessonId: activeLesson.id }));
-      } else {
-        localStorage.removeItem('shifu_active_lesson');
-      }
-    } catch { /* ignore */ }
-  }, [activeLesson, activeTab]);
 
   // Restore active lesson from localStorage on first load
   useEffect(() => {
@@ -91,31 +61,80 @@ export default function App() {
     } catch { /* ignore */ }
   }, []);
 
+  // Save active lesson
+  useEffect(() => {
+    try {
+      if (activeLesson) {
+        localStorage.setItem('shifu_active_lesson', JSON.stringify({ tab: activeTab, lessonId: activeLesson.id }));
+      } else {
+        localStorage.removeItem('shifu_active_lesson');
+      }
+    } catch { /* ignore */ }
+  }, [activeLesson, activeTab]);
+
   const handleCompleteLesson = (lessonId, xpEarned) => {
     setUserStats(prev => {
       const alreadyDone = prev.completedLessonIds.includes(lessonId);
-      if (alreadyDone) return prev;
-
-      const newCompleted = [...prev.completedLessonIds, lessonId];
-      const newXp = prev.xp + xpEarned;
+      const newCompleted = alreadyDone ? prev.completedLessonIds : [...prev.completedLessonIds, lessonId];
+      const newXp = prev.xp + (alreadyDone ? 10 : xpEarned);
       const newLevel = Math.max(prev.level, Math.floor(newXp / 100) + 1);
 
-      // Badge awards
       const newBadges = [...prev.badges];
       if (newLevel > prev.level && !newBadges.some(b => b.includes(`Daraja ${newLevel}`))) {
         newBadges.push(`⭐ Daraja ${newLevel} erishildi!`);
       }
-      if (newCompleted.length === 1) newBadges.push('🌱 Birinchi dars!');
-      if (newCompleted.length === 6) newBadges.push('🔥 Yarim yo\'l!');
-      if (newCompleted.length === 12) newBadges.push('🏆 Kurs yakunlandi!');
+      if (newCompleted.length === 1 && !newBadges.includes('🌱 Birinchi dars!')) newBadges.push('🌱 Birinchi dars!');
+      if (newCompleted.length === 6 && !newBadges.some(b => b.includes('Yarim'))) newBadges.push("🔥 Yarim yo'l!");
+      if (newCompleted.length === 12 && !newBadges.some(b => b.includes('Kurs yakunlandi'))) newBadges.push('🏆 Kurs yakunlandi!');
 
-      return { ...prev, xp: newXp, level: newLevel, completedLessonIds: newCompleted, badges: newBadges };
+      return {
+        ...prev,
+        xp: newXp,
+        level: newLevel,
+        completedLessonIds: newCompleted,
+        badges: newBadges
+      };
     });
 
-    // Confetti celebration
     try {
       confetti({ particleCount: 100, spread: 80, origin: { y: 0.6 } });
     } catch { /* ignore */ }
+  };
+
+  const handleNextLesson = (targetLesson) => {
+    if (targetLesson) {
+      setActiveLesson(targetLesson);
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  };
+
+  const handlePrevLesson = (targetLesson) => {
+    if (targetLesson) {
+      setActiveLesson(targetLesson);
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  };
+
+  const handleToggleUnlockAll = () => {
+    setUserStats(prev => ({
+      ...prev,
+      unlockedAll: !prev.unlockedAll
+    }));
+  };
+
+  const handleUnlockAllDirect = () => {
+    setUserStats(prev => ({
+      ...prev,
+      unlockedAll: true,
+      completedLessonIds: Array.from(new Set([...prev.completedLessonIds, ...LESSONS.map(l => l.id)]))
+    }));
+  };
+
+  const handleResetProgress = () => {
+    const fresh = { ...DEFAULT_STATS, lastVisitDate: new Date().toISOString().split('T')[0] };
+    setUserStats(fresh);
+    localStorage.removeItem('shifu_active_lesson');
+    setActiveLesson(null);
   };
 
   const handleTabChange = (tab) => {
@@ -126,26 +145,47 @@ export default function App() {
   return (
     <PyodideProvider>
       <div className="app-container">
-        <Navbar activeTab={activeTab} setActiveTab={handleTabChange} userStats={userStats} />
+        <Navbar 
+          activeTab={activeTab} 
+          setActiveTab={handleTabChange} 
+          userStats={userStats}
+          onOpenDBModal={() => setIsDBModalOpen(true)}
+        />
 
         <main className="main-content">
           {activeTab === 'course' && !activeLesson && (
             <CourseMapView
               lessons={LESSONS}
               completedLessonIds={userStats.completedLessonIds}
+              unlockedAll={userStats.unlockedAll}
+              onToggleUnlockAll={handleToggleUnlockAll}
               onSelectLesson={setActiveLesson}
             />
           )}
+
           {activeTab === 'course' && activeLesson && (
             <LessonStudio
               lesson={activeLesson}
+              lessons={LESSONS}
               onCompleteLesson={handleCompleteLesson}
               onBack={() => setActiveLesson(null)}
+              onNextLesson={handleNextLesson}
+              onPrevLesson={handlePrevLesson}
             />
           )}
+
           {activeTab === 'cs50p' && <HarvardCS50PView />}
           {activeTab === 'projects' && <CapstoneProjectsView />}
         </main>
+
+        <DatabaseModal
+          isOpen={isDBModalOpen}
+          onClose={() => setIsDBModalOpen(false)}
+          userStats={userStats}
+          onUpdateStats={setUserStats}
+          onUnlockAll={handleUnlockAllDirect}
+          onReset={handleResetProgress}
+        />
 
         <footer style={{
           borderTop: '1px solid var(--border)', padding: '1.25rem 2rem',
